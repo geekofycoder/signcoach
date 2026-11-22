@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign Coach</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #5d6673; --line: #dfe3e8;
+    --ok: #1a9e55; --warn: #d98a00; --bad: #d23b3b; --info: #3a74d8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #12151a; --panel: #1b2027; --text: #e8ebef; --muted: #97a1ae; --line: #2c333c;
+            --ok: #3ccf82; --warn: #f0b13a; --bad: #f06a6a; --info: #6f9cf0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px;
+         grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  h2 { font-size: 13px; margin: 0 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .stage { position: relative; border-radius: 12px; overflow: hidden; background: #000; aspect-ratio: 4 / 3; }
+  .stage video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+  .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .chip { position: absolute; top: 10px; left: 10px; padding: 4px 10px; border-radius: 999px;
+          font-size: 14px; font-weight: 600; color: #fff; background: #444; }
+  .chip.correct { background: var(--ok); } .chip.close { background: var(--warn); }
+  .chip.incorrect { background: var(--bad); } .chip.no_hand, .chip.unclear { background: #555; }
+  .hold { position: absolute; left: 0; bottom: 0; height: 6px; background: var(--ok); width: 0; transition: width .3s; }
+  .caption { min-height: 3.2em; margin-top: 12px; padding: 10px 12px; border-radius: 8px;
+             background: var(--bg); border: 1px solid var(--line); }
+  .caption.empty { color: var(--muted); }
+  .sign-label { font-size: 28px; font-weight: 700; margin: 0 0 4px; }
+  /* Reference drawing. Always on white: the artwork is black line art, invisible on the dark panel. */
+  .ref { margin: 10px 0 14px; }
+  .ref[hidden] { display: none; }
+  .ref img { display: block; margin: 0 auto; width: auto; max-width: 100%; height: 220px; object-fit: contain;
+             background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
+  .ref figcaption { font-size: 12px; color: var(--muted); margin-top: 6px; text-align: center; }
+  .ref figcaption a { color: inherit; }
+  .muted { color: var(--muted); }
+  .parts { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 0; }
+  .parts span { font-size: 13px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); }
+  .parts span.hot { border-color: var(--bad); color: var(--bad); font-weight: 600; }
+  .dots { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+  .dots button { min-width: 36px; height: 32px; padding: 0 8px; border-radius: 8px; cursor: pointer;
+                 border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; font-size: 13px; }
+  .dots button.done { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .dots button.now { outline: 2px solid var(--info); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel);
+         color: var(--text); font: inherit; cursor: pointer; }
+  .btn.primary { background: var(--info); border-color: var(--info); color: #fff; font-weight: 600; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .row[hidden] { display: none; }
+  .field { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel);
+           color: var(--text); font: inherit; min-width: 0; flex: 1; max-width: 260px; }
+  .banner { grid-column: 1 / -1; display: none; padding: 10px 14px; border-radius: 8px; background: var(--bad); color: #fff; }
+  .flash { animation: flash .8s ease-out; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 0 var(--ok); } 100% { box-shadow: 0 0 0 28px transparent; } }
+  @media (prefers-reduced-motion: reduce) { .flash { animation: none; } .hold { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="banner" id="banner" role="alert"></div>
+
+  <section class="panel">
+    <h1>Sign Coach</h1>
+    <div class="stage" id="stage">
+      <video id="cam" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="chip" id="chip" hidden></div>
+      <div class="hold" id="hold"></div>
+    </div>
+    <div class="caption empty" id="caption" aria-live="polite">Press Start, allow camera and microphone, then follow the coach.</div>
+    <div class="row" id="passrow" style="margin-top:12px" hidden>
+      <input class="field" id="passcode" type="password" autocomplete="off" placeholder="Passcode" aria-label="Passcode">
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="start">Start</button>
+      <button class="btn" id="stop" disabled>Stop</button>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Current sign">
+    <h2>Current sign</h2>
+    <p class="sign-label" id="label">-</p>
+    <figure class="ref" id="ref" hidden>
+      <img id="refimg" alt="">
+      <figcaption id="refcredit"></figcaption>
+    </figure>
+    <div id="tip" class="muted">Waiting to start.</div>
+    <div id="desc" style="margin-top:10px"></div>
+    <div class="parts" id="parts"></div>
+    <h2 style="margin-top:18px">Progress</h2>
+    <div class="dots" id="dots"></div>
+    <div class="row">
+      <button class="btn" id="repeat" disabled>Repeat</button>
+      <button class="btn" id="skip" disabled>Skip</button>
+    </div>
+    <p class="muted" style="font-size:13px;margin-top:14px">
+      You can also talk: "skip", "go back to L", "say that again".
+      Camera frames are sent to Claude for checking while a session runs.
+    </p>
+  </section>
+</main>
+<audio id="speaker" autoplay></audio>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const COLORS = { correct: "#1a9e55", close: "#d98a00", incorrect: "#d23b3b", unclear: "#888", no_hand: "#888" };
+const VERDICT_TEXT = { correct: "Looks right", close: "Almost", incorrect: "Not yet", unclear: "Hold steady", no_hand: "Show your hand" };
+const SIGNS = [];            // filled as lessons arrive (id, label)
+let pc, dc, stream, pingTimer, ws = null;
+let lesson = null, progress = { index: 0, total: 0, completed: [] };
+let last = null;             // last judgement, redrawn each frame
+let lastAt = 0;
+
+function banner(msg) { const b = $("banner"); b.textContent = msg; b.style.display = msg ? "block" : "none"; }
+
+// ---------- overlay drawing ----------
+const canvas = $("overlay"), ctx = canvas.getContext("2d");
+function fit() {
+  const r = canvas.getBoundingClientRect(), d = devicePixelRatio || 1;
+  canvas.width = r.width * d; canvas.height = r.height * d;
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+}
+addEventListener("resize", fit);
+
+// The video is object-fit: cover and mirrored, so map image fractions to canvas pixels.
+function mapBox(b) {
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  const vw = $("cam").videoWidth || 4, vh = $("cam").videoHeight || 3;
+  const scale = Math.max(cw / vw, ch / vh);
+  const dw = vw * scale, dh = vh * scale, ox = (cw - dw) / 2, oy = (ch - dh) / 2;
+  const x = ox + b.x * dw, y = oy + b.y * dh, w = b.w * dw, h = b.h * dh;
+  return { x: cw - (x + w), y, w, h };   // mirror horizontally
+}
+
+function draw(t) {
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  ctx.clearRect(0, 0, cw, ch);
+  const fresh = last && performance.now() - lastAt < 4000;
+  if (!fresh || last.verdict === "no_hand") {
+    if (stream) {                                   // guide frame to place the hand in
+      const w = cw * 0.4, h = ch * 0.55, x = (cw - w) / 2, y = (ch - h) / 2;
+      ctx.setLineDash([10, 8]); ctx.lineWidth = 3; ctx.strokeStyle = "rgba(255,255,255,.7)";
+      ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
+    }
+  } else if (last.hand_box) {
+    const b = mapBox(last.hand_box), c = COLORS[last.verdict] || "#888";
+    const pulse = last.verdict === "correct" ? 0 : 2 + 2 * Math.sin(t / 220);
+    ctx.lineWidth = 4; ctx.strokeStyle = c;
+    ctx.strokeRect(b.x - pulse, b.y - pulse, b.w + 2 * pulse, b.h + 2 * pulse);
+    if ((last.verdict === "close" || last.verdict === "incorrect") && last.problem_part && last.problem_part !== "none") {
+      const text = "Check: " + last.problem_part;
+      ctx.font = "600 15px system-ui"; const tw = ctx.measureText(text).width + 16;
+      const ty = Math.max(0, b.y - 30);
+      ctx.fillStyle = c; ctx.fillRect(b.x, ty, tw, 26);
+      ctx.fillStyle = "#fff"; ctx.fillText(text, b.x + 8, ty + 18);
+    }
+  }
+  requestAnimationFrame(draw);
+}
+
+// ---------- UI state ----------
+function renderReference() {
+  const fig = $("ref"), img = $("refimg"), credit = $("refcredit");
+  // Only same-site paths: the server decides this value, but never let it point elsewhere.
+  if (!lesson.image || !lesson.image.startsWith("/static/")) { fig.hidden = true; return; }
+  if (img.getAttribute("src") !== lesson.image) img.src = lesson.image;
+  img.alt = "Reference drawing of the ASL sign for " + lesson.label;
+  credit.textContent = "";
+  if (lesson.image_credit_url && /^https:\/\//.test(lesson.image_credit_url)) {
+    const a = document.createElement("a");
+    a.href = lesson.image_credit_url; a.target = "_blank"; a.rel = "noopener noreferrer";
+    a.textContent = lesson.image_credit; credit.appendChild(a);
+  } else { credit.textContent = lesson.image_credit || ""; }
+  fig.hidden = false;
+}
+function renderLesson() {
+  if (!lesson) return;
+  renderReference();
+  $("label").textContent = lesson.label;
+  $("tip").textContent = lesson.tip;
+  $("desc").textContent = lesson.description;
+  renderParts(null);
+  const dots = $("dots"); dots.innerHTML = "";
+  SIGNS.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.textContent = s.id; b.title = s.label;
+    if (progress.completed.includes(s.id)) b.classList.add("done");
+    if (i === progress.index) b.classList.add("now");
+    b.onclick = () => send({ action: "select", id: s.id });
+    dots.appendChild(b);
+  });
+}
+function renderParts(hot) {
+  const box = $("parts"); box.innerHTML = "";
+  (lesson?.key_parts || []).forEach((p) => {
+    const s = document.createElement("span"); s.textContent = p;
+    if (hot && (hot === p || hot === "fingers")) s.classList.add("hot");
+    box.appendChild(s);
+  });
+}
+function say(text) { const c = $("caption"); c.textContent = text; c.classList.remove("empty"); }
+
+function onCoach(m) {
+  if (m.kind === "lesson") {
+    if (!SIGNS.find((s) => s.id === m.sign.id)) SIGNS.push({ id: m.sign.id, label: m.sign.label });
+    lesson = m.sign; progress = { index: m.index, total: m.total, completed: m.completed };
+    last = null; $("chip").hidden = true; $("hold").style.width = "0";
+    renderLesson();
+  } else if (m.kind === "judgement") {
+    last = m; lastAt = performance.now();
+    const chip = $("chip"); chip.hidden = false; chip.className = "chip " + m.verdict;
+    chip.textContent = VERDICT_TEXT[m.verdict] || m.verdict;
+    $("hold").style.width = Math.min(100, (m.hold / m.hold_needed) * 100) + "%";
+    renderParts(m.verdict === "close" || m.verdict === "incorrect" ? m.problem_part : null);
+  } else if (m.kind === "speech") {
+    say(m.text);
+  } else if (m.kind === "success") {
+    progress = { ...progress, completed: m.completed };
+    const s = $("stage"); s.classList.remove("flash"); void s.offsetWidth; s.classList.add("flash");
+    renderLesson();
+  } else if (m.kind === "finished") {
+    progress = { ...progress, completed: m.completed }; renderLesson();
+  } else if (m.kind === "session_end") {
+    banner("Session ended: the time limit was reached. Press Start to begin a new one.");
+    stop();
+  }
+}
+
+function send(obj) {
+  if (dc && dc.readyState === "open") dc.send(JSON.stringify({ type: "signcoach", ...obj }));
+}
+$("skip").onclick = () => send({ action: "skip" });
+$("repeat").onclick = () => send({ action: "repeat" });
+
+// ---------- server access ----------
+// Add ?relay=1 to the address to force every connection through the TURN relay. Use it to check
+// that the relay works from your own machine before deploying.
+const relayOnly = new URLSearchParams(location.search).get("relay") === "1";
+const STUN_ONLY = [{ urls: "stun:stun.l.google.com:19302" }];
+function authHeaders(extra = {}) { const p = $("passcode").value; return p ? { ...extra, "X-Passcode": p } : extra; }
+async function errorText(r) { try { return (await r.json()).detail || r.status; } catch { return r.status; } }
+async function loadConfig() {
+  try {
+    const c = await (await fetch("/api/config")).json();
+    $("passrow").hidden = !c.passcode_required;
+    try { $("passcode").value = sessionStorage.getItem("signcoach_pass") || ""; } catch {}
+  } catch {}
+}
+// Relay credentials come from the server, which keeps the Cloudflare token to itself.
+async function getIceServers() {
+  const r = await fetch("/api/ice", { headers: authHeaders() });
+  if (r.status === 401) throw new Error("wrong or missing passcode");
+  if (!r.ok) return STUN_ONLY;
+  try { sessionStorage.setItem("signcoach_pass", $("passcode").value); } catch {}
+  return (await r.json()).iceServers;
+}
+
+// ---------- WebRTC ----------
+async function start() {
+  banner(""); $("start").disabled = true;
+  let servers;
+  try { servers = await getIceServers(); }          // checked first, so a wrong passcode never asks for the camera
+  catch (e) { banner("Could not start: " + e.message); $("start").disabled = false; return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+      video: { width: 640, height: 480, facingMode: "user" },
+    });
+  } catch (e) { banner("Could not use the camera or microphone: " + e.message); $("start").disabled = false; return; }
+  $("cam").srcObject = stream; fit();
+
+  pc = new RTCPeerConnection({ iceServers: servers, iceTransportPolicy: relayOnly ? "relay" : "all" });
+  dc = pc.createDataChannel("chat", { ordered: true });
+  dc.onopen = () => { pingTimer = setInterval(() => dc.readyState === "open" && dc.send("ping " + Date.now()), 1000);
+                      ["skip", "repeat", "stop"].forEach((i) => ($(i).disabled = false)); };
+  dc.onmessage = (ev) => { try { const m = JSON.parse(ev.data); if (m.type === "signcoach") onCoach(m); } catch {} };
+  // Order matters to the server: audio first, then video.
+  pc.addTransceiver(stream.getAudioTracks()[0], { direction: "sendrecv" });
+  pc.addTransceiver(stream.getVideoTracks()[0], { direction: "sendrecv" });
+  pc.ontrack = (ev) => { if (ev.track.kind === "audio") $("speaker").srcObject = ev.streams[0] || new MediaStream([ev.track]); };
+  pc.onconnectionstatechange = () => { if (["failed", "disconnected", "closed"].includes(pc.connectionState)) stop(); };
+
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise((res) => {             // wait for ICE candidates instead of trickling
+    if (pc.iceGatheringState === "complete") return res();
+    pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && res();
+    setTimeout(res, 3000);
+  });
+  try {
+    const r = await fetch("/api/offer", { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }) });
+    if (!r.ok) throw new Error(await errorText(r));
+    await pc.setRemoteDescription(await r.json());
+  } catch (e) { banner("Could not connect: " + e.message); stop(); }
+}
+
+function stop() {
+  clearInterval(pingTimer);
+  try { dc && dc.close(); pc && pc.close(); } catch {}
+  stream && stream.getTracks().forEach((t) => t.stop());
+  stream = pc = dc = null; $("cam").srcObject = null; last = null;
+  $("chip").hidden = true; $("hold").style.width = "0";
+  $("start").disabled = false;
+  ["skip", "repeat", "stop"].forEach((i) => ($(i).disabled = true));
+}
+$("start").onclick = start;
+$("stop").onclick = stop;
+loadConfig(); fit(); requestAnimationFrame(draw);
+</script>
+</body>
+</html>

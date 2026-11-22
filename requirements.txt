@@ -1,0 +1,7 @@
+pipecat-ai[anthropic,webrtc,deepgram,cartesia,silero]>=1.16
+anthropic>=1.17
+python-dotenv
+fastapi
+uvicorn
+pillow
+httpx
