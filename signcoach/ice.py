@@ -7,6 +7,8 @@ the server (aiortc has stricter rules than browsers).
 """
 
 import asyncio
+import json
+import os
 import re
 import time
 
@@ -61,6 +63,41 @@ def clean_servers(raw) -> list[dict]:
     return out
 
 
+def parse_static(text: str | None) -> list[dict]:
+    """Servers pasted from a provider's dashboard (ICE_SERVERS_JSON). Empty if missing or unusable.
+
+    The value holds relay passwords, so a parse error never logs it.
+    """
+    if not text or not text.strip():
+        return []
+    try:
+        servers = clean_servers(json.loads(text))
+    except ValueError:
+        logger.warning("ICE_SERVERS_JSON is not valid JSON; ignoring it")
+        return []
+    if not any("username" in s for s in servers):
+        logger.warning("ICE_SERVERS_JSON has no TURN server with a username and credential; ignoring it")
+        return []
+    return servers
+
+
+METERED_HOST = "global.relay.metered.ca"
+
+
+def metered_servers(username: str | None, password: str | None) -> list[dict]:
+    """The relay list Metered's dashboard shows, built from just the username and password."""
+    if not (username and password):
+        return []
+    login = {"username": username, "credential": password}
+    return clean_servers([
+        {"urls": "stun:stun.relay.metered.ca:80"},
+        {"urls": f"turn:{METERED_HOST}:80", **login},
+        {"urls": f"turn:{METERED_HOST}:80?transport=tcp", **login},
+        {"urls": f"turn:{METERED_HOST}:443", **login},
+        {"urls": f"turns:{METERED_HOST}:443?transport=tcp", **login},
+    ])
+
+
 def _turn_rank(url: str) -> int:
     """TCP and TLS first: Railway may block outbound UDP, and TLS on a normal port passes most firewalls."""
     if url.startswith("turns:"):
@@ -92,9 +129,11 @@ def server_servers(servers: list[dict]) -> list[RTCIceServer]:
 class IceProvider:
     """Hands out ICE servers, keeping Cloudflare credentials cached until shortly before they expire."""
 
-    def __init__(self, key_id: str | None = None, api_token: str | None = None, transport=None):
+    def __init__(self, key_id: str | None = None, api_token: str | None = None, transport=None,
+                 static_servers: list[dict] | None = None):
         self._key_id = key_id
         self._token = api_token
+        self._static = static_servers or []  # fixed list from any provider; used when Cloudflare is not set
         self._transport = transport  # tests pass httpx.MockTransport
         self._cached: list[dict] | None = None
         self._expires = 0.0
@@ -102,18 +141,24 @@ class IceProvider:
 
     @classmethod
     def from_env(cls):
-        import os
+        # Order of preference: Cloudflare (fresh credentials), a pasted list, then Metered's username and password.
+        static = parse_static(os.getenv("ICE_SERVERS_JSON")) or metered_servers(
+            os.getenv("METERED_USERNAME"), os.getenv("METERED_PASSWORD"))
+        return cls(os.getenv("CLOUDFLARE_TURN_KEY_ID"), os.getenv("CLOUDFLARE_TURN_API_TOKEN"),
+                   static_servers=static)
 
-        return cls(os.getenv("CLOUDFLARE_TURN_KEY_ID"), os.getenv("CLOUDFLARE_TURN_API_TOKEN"))
+    @property
+    def _cloudflare(self) -> bool:
+        return bool(self._key_id and self._token)
 
     @property
     def relay_enabled(self) -> bool:
-        return bool(self._key_id and self._token)
+        return self._cloudflare or bool(self._static)
 
     async def servers(self) -> list[dict]:
         """Server list for the browser. Never raises: without a relay it is plain STUN."""
-        if not self.relay_enabled:
-            return DEFAULT_ICE
+        if not self._cloudflare:
+            return self._static or DEFAULT_ICE
         async with self._lock:
             if self._cached and time.monotonic() < self._expires:
                 return self._cached

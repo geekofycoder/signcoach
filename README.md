@@ -59,7 +59,9 @@ Railway only accepts HTTP and TCP from the internet, and WebRTC needs UDP, so th
 through a TURN relay (Cloudflare's, free up to 1,000 GB a month). The server fetches short-lived relay
 credentials and gives them to the page, so the Cloudflare token never reaches the browser.
 
-1. In Cloudflare, create a TURN key (Realtime > TURN). Note the key ID and the API token.
+1. Get a TURN relay. Either create a TURN key in Cloudflare (Realtime > TURN; note the key ID and API token;
+   the dashboard asks for a payment card), or use any other provider and paste the ICE servers array from
+   its dashboard into `ICE_SERVERS_JSON`.
 2. In Railway, create a service from this GitHub repo. It builds the `Dockerfile` by itself.
 3. Set these variables on the service:
 
@@ -67,7 +69,9 @@ credentials and gives them to the page, so the Cloudflare token never reaches th
 |---|---|---|
 | `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY` | yes | The three service keys |
 | `CARTESIA_VOICE_ID` | yes | Voice to speak with |
-| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | yes on Railway | TURN relay. Without them the app uses plain STUN, which only works where UDP gets through |
+| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | one relay option is needed on Railway | Cloudflare TURN relay |
+| `METERED_USERNAME`, `METERED_PASSWORD` | a third relay option | A Metered credential. Free plan: 500 MB a month, then the relay stops until the next cycle. Used only when neither of the other two options is set |
+| `ICE_SERVERS_JSON` | the other relay option | Relay servers from any provider, as a JSON array on one line. Ignored when the Cloudflare values are set. With neither, the app uses plain STUN, which only works where UDP gets through |
 | `APP_PASSCODE` | strongly advised | The page asks for it. Without one, anyone with the address spends your API credits |
 | `MAX_SESSION_SECONDS`, `MAX_SESSIONS` | optional | Default 900 seconds and 2 at once |
 | `VISION_MODEL`, `CHAT_MODEL` | optional | Smaller models cost less |

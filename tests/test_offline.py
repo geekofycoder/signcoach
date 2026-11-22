@@ -273,6 +273,70 @@ def test_relay_credentials_are_cached_and_failures_fall_back():
     asyncio.run(run())
 
 
+def test_relay_servers_can_come_from_any_provider_via_one_variable():
+    import asyncio
+    import json
+
+    from aiortc.rtcicetransport import connection_kwargs
+
+    from signcoach.ice import DEFAULT_ICE, IceProvider, parse_static, server_servers
+
+    # Shaped like the array a provider's dashboard shows (Metered, ExpressTURN, Xirsys, ...).
+    pasted = json.dumps([
+        {"urls": "stun:relay.example.com:80"},
+        {"urls": "turn:relay.example.com:80", "username": "u1", "credential": "p1"},
+        {"urls": "turn:relay.example.com:443?transport=tcp", "username": "u1", "credential": "p1"},
+        {"urls": "turns:relay.example.com:443?transport=tcp", "username": "u1", "credential": "p1"},
+    ])
+    servers = parse_static(pasted)
+    assert len(servers) == 4 and servers[3]["username"] == "u1"
+    kw = connection_kwargs(server_servers(servers))
+    assert kw["turn_server"] == ("relay.example.com", 443) and kw["turn_ssl"] is True  # TLS chosen for the server
+
+    assert parse_static(None) == [] and parse_static("  ") == []
+    assert parse_static("{not json") == []  # bad paste: ignored, and the text is never logged
+    assert parse_static('[{"urls": "stun:relay.example.com:80"}]') == []  # STUN alone is no relay
+
+    async def run():
+        p = IceProvider(static_servers=servers)  # no HTTP transport given: any fetch attempt would fail
+        assert p.relay_enabled and await p.servers() == servers
+        assert not IceProvider().relay_enabled and await IceProvider().servers() == DEFAULT_ICE
+        both = IceProvider("KEY", "TOKEN", static_servers=servers)
+        assert both.relay_enabled  # Cloudflare takes priority when both are set
+
+    asyncio.run(run())
+
+
+def test_metered_username_and_password_build_the_relay_list():
+    import os
+
+    from aiortc.rtcicetransport import connection_kwargs
+
+    from signcoach.ice import IceProvider, metered_servers, server_servers
+
+    servers = metered_servers("someuser", "somepass")
+    urls = [u for s in servers for u in s["urls"]]
+    assert len(urls) == 5 and "turns:global.relay.metered.ca:443?transport=tcp" in urls
+    kw = connection_kwargs(server_servers(servers))
+    assert kw["turn_server"] == ("global.relay.metered.ca", 443) and kw["turn_ssl"] is True
+    assert kw["turn_username"] == "someuser" and kw["turn_password"] == "somepass"
+    assert metered_servers("someuser", None) == [] and metered_servers("", "x") == []
+
+    old = {k: os.environ.get(k) for k in ("METERED_USERNAME", "METERED_PASSWORD", "ICE_SERVERS_JSON",
+                                          "CLOUDFLARE_TURN_KEY_ID", "CLOUDFLARE_TURN_API_TOKEN")}
+    try:
+        for k in old:
+            os.environ.pop(k, None)
+        assert not IceProvider.from_env().relay_enabled
+        os.environ.update(METERED_USERNAME="someuser", METERED_PASSWORD="somepass")
+        assert IceProvider.from_env().relay_enabled  # the two variables are enough
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+
 def test_passcode_and_session_cap():
     from signcoach.access import SessionCounter, passcode_ok
 
